@@ -1,0 +1,118 @@
+create or replace view contour.report_suist2_order_dur_v2_d as
+select
+  -- СУИСТ2. Длительность выполнения нарядов v2 - Детализация
+  ord.c1 as order_id, -- ID наряда
+  trunc(convert_date_from_rem_to_ora(ord.c3)) as report_date, -- Дата создания наряда
+  convert_date_from_rem_to_ora(ord.c3) as report_date_full, -- Дата создания наряда
+  convert_date_from_rem_to_ora(ord.c700001019) as order_close_date, -- Дата закрытия наряда
+  convert_date_from_rem_to_ora(ord.c1111000021) as order_task_start_date, -- Дата установки текущего статуса
+  ord.c1111000015 as order_status, -- Статус наряда
+  nvl(f.name,'*Не указан*') as filial_name, -- Филиал наряда
+  nvl(ord.c700001003,'*Не указан*') as town_name, -- Населенный пункт
+  decode(ts.town_type_id,1,'ГТС',2,'СТС',null) as town_type, -- Тип населенного пункта
+  decode(tscu.is_use,1,'Да',null) as town_characteristic_56, -- Населенный пункт включен в договор по УУ
+  nvl(ord.c700001020,'*Неизвестно*') as service_name, -- Регламент
+  decode(ord.c700001015,0,'Автоматическая',1,'Ручная','*Не указано*') as activation_type, -- Тип активации
+  nvl(decode(ord.c8,'R',order_action.c8,cust_order_type.name),'*Не указан*') as order_type, -- Тип наряда
+  nvl(ord.c700001051,-7) as abonent_group_id, -- ID группы абонента
+  nvl(abonent_group.name,'*Не указана*') as abonent_group_name, -- Группа абонента
+  nvl(decode(ord.c8,'R',dev_group.name,rsg.name),'*Не указана*') as resource_spec_group, -- Группа спецификации ресурса
+  nvl(decode(ord.c8,'R',conn_type_old.name,rs.name),'*Не указана*') as resource_specification, -- Спецификация ресурса
+  nvl(ms_segment.name,'*Не указан*') as ms_segment_name, -- Сегмент лицевого счета
+  nvl(rr.name,'*Не указана*') as order_reject_reason, -- Причина отказа
+  nvl(po_new.name,'*Не указано*') as product_offer_new, -- Продуктовое предложение (н)
+  ord.c700001201 as order_device_number, -- Номер устройства (н)
+  ord.c700001256 as account_number, -- № л/с (н)
+  ord.c700001002 as crm_order_id, -- ID заказа CRM
+  nvl(sales_channel.name,'*Не указан*') as sales_channel, -- Канал продаж
+  decode(ord.c700001061,0,'Не требуется',1,'Требуется','*Не указано*') as is_demand_installer, -- Выезд инсталлятора
+  decode(ord.c700001503,null,'*Нет данных*',ord.c700001503 || '%') as install_quality, -- Качество инсталляционных работ
+  decode(ord.c8,'2',Contour_CMS2_Utils.Get_Order_Item_Product_Groups(ord.c1),'') as order_item_product_group_names, -- Группы продуктов в позициях заказа
+  decode(ord.c8,'2',Contour_CMS2_Utils.Get_Order_Item_Products(ord.c1),'') as order_item_product_names, -- Продукты в позициях заказа
+  case
+    -- Если длительность выполнения заказа без учета ожидания даты явки к абоненту превышает контрольный срок выполнения заказа
+    when (sat.duration_02-nvl(sat.duration_12,0))>srv.c1111003001 then 'Да'
+    else 'Нет'
+  end as order_overtime_flag, -- Наряд сверхсрочный
+  round(sat.duration_01/3600,2) as dur_order_done, -- Длительность выполнения наряда, раб. ч.
+  round(sat.duration_02/3600,2) as dur_crm_order_done, -- Длительность выполнения заказа, раб. ч.
+  round(sat.duration_03/3600,2) as dur_install_uninstall_work, -- Длительность инсталляционных/деинсталляционных работ, раб. ч.
+  round(sat.duration_04/3600,2) as dur_BackOfficeTechCapability, -- Длительность выполнения поручений группы BackOfficeTechCapability, раб. ч.
+  round(sat.duration_05/3600,2) as dur_BackOfficeSystem, -- Длительность выполнения поручений группы BackOfficeSystem, раб. ч.
+  round(sat.duration_06/3600,2) as dur_FrontOfficeInstall, -- Длительность выполнения поручений группы FrontOfficeInstall, раб. ч.
+  round(sat.duration_07/3600,2) as dur_BackOfficeInventory, -- Длительность выполнения поручений группы BackOfficeInventory, раб. ч.
+  round(sat.duration_08/3600,2) as dur_t00003, -- Длительность выполнения задач "Принятие решения менеджером", раб. ч.
+  round(sat.duration_09/3600,2) as dur_t00007, -- Длительность выполнения задач "Работы выполнены. Ожидание ответа от OSM", раб. ч.
+  round(sat.duration_10/3600,2) as dur_t00004, -- Длительность выполнения задач "Ожидание ответа от OSM", раб. ч.
+  round(sat.duration_11/3600,2) as dur_t00004_r00001, -- Длительность выполнения задач "Ожидание ответа от OSM" с классификацией "Требуется замена линейных данных", раб. ч.
+  round(sat.duration_12/3600,2) as dur_wait_for_install, -- Длительность ожидания явки к абоненту, раб. ч.
+  round((sat.duration_02-nvl(sat.duration_12,0))/3600,2) as dur_crm_order_done_without_wfi, -- Длительность выполнения заказа без учета ожидания даты явки к абоненту, раб. ч.
+  round(srv.c1111003001/3600,2) as order_control_time_value, -- Контрольный срок выполнения заказа, раб. ч.
+  round(dirs.control_term_all_dirs/3600,2) as control_term_all_dirs, -- Контрольный срок выполнения наряда, раб. ч.
+  round(dirs.control_term_group_10/3600,2) as control_term_group_10, -- Контрольный срок выполнения поручений группы BackOfficeTechCapability, раб. ч.
+  round(dirs.control_term_group_20/3600,2) as control_term_group_20, -- Контрольный срок выполнения поручений группы BackOfficeSystem, раб. ч.
+  round(dirs.control_term_group_30/3600,2) as control_term_group_30, -- Контрольный срок выполнения поручений группы FrontOfficeInstall, раб. ч.
+  round(dirs.control_term_group_40/3600,2) as control_term_group_40, -- Контрольный срок выполнения поручений группы BackOfficeInventory, раб. ч.
+  round(dirs.dir_work_restrict_duration/3600,2) as dir_work_restrict_duration -- Длительность запрета работ, раб. ч.
+from
+  aradmin.t1532 ord, -- CMS2:Order
+  sust.filial f,
+  aradmin.t1488 order_action, -- Dict:Order_Action
+  isb.cust_order_type cust_order_type,
+  nsi.tariff_plan abonent_group,
+  nsi.device_group dev_group, -- Dict:Device_Group
+  isb.resource_spec_group rsg,
+  nsi.connect_type conn_type_old, -- Dict:Connect_Type
+  isb.resource_specification rs,
+  isb.ms_segment ms_segment,
+  isb.po_reject_reason rr,
+  isb.product_offer po_new,
+  isb.sales_channel sales_channel,
+  isb.town_state ts,
+  isb.town_state_char_use tscu,
+  aradmin.custom_cms2_order_satellite sat,
+  aradmin.t1886 srv, -- CMS2:Setttings:Service
+  (
+    select
+      dir.c8 as order_id,
+      sum(nvl(dir.c700001501,0)) as control_term_all_dirs,
+      sum(decode(r.c536870939,10,nvl(dir.c700001501,0),0)) as control_term_group_10,
+      sum(decode(r.c536870939,20,nvl(dir.c700001501,0),0)) as control_term_group_20,
+      sum(decode(r.c536870939,30,nvl(dir.c700001501,0),0)) as control_term_group_30,
+      sum(decode(r.c536870939,40,nvl(dir.c700001501,0),0)) as control_term_group_40,
+      sum(dir.c700001507) as dir_work_restrict_duration -- Длительность запрета работ, раб. сек.
+    from
+      aradmin.t1533 dir, -- CMS2:Order_Directive
+      aradmin.t1571 r -- Dict:OSM:Roles
+    where
+      -- dir.c8='DOR-002657241' and
+      -- dir.c3>1546279199 and -- поручения, зарегистрированные с 01.01.2019
+      dir.c3>1577815199 and -- поручения, зарегистрированные с 01.01.2020
+      dir.c536870964=r.c8 and
+      not (dir.c700002034=0 and nvl(dir.c700001501,0)=0) -- не рассматриваются поручения, где Auto_Done="Да" и Directive_Control_Term=0
+    group by
+      dir.c8
+  ) dirs
+where
+  -- ord.c1='DOR-002657241' and
+  -- ord.c3>1546279199 and -- наряды, зарегистрированные с 01.01.2019
+  ord.c3>1577815199 and -- наряды, зарегистрированные с 01.01.2020
+  ord.c700002011=f.id_filial(+) and
+  ord.c700002006=order_action.c1(+) and
+  ord.c700001052=cust_order_type.id(+) and
+  ord.c700001051=abonent_group.tariff_plan_id(+) and
+  nvl(ord.c700002009,ord.c700001059)=dev_group.device_group_id(+) and
+  ord.c700002009=rsg.id(+) and
+  nvl(ord.c700002103,ord.c700001153)=conn_type_old.connect_type_id(+) and
+  nvl(ord.c700002103,ord.c700002203)=rs.id(+) and
+  ord.c700003015=ms_segment.id(+) and
+  ord.c700003018=rr.id(+) and
+  ord.c700001263=po_new.id(+) and
+  ord.c700003013=sales_channel.id(+) and
+  ord.c700001264=ts.id(+) and
+  ts.id=tscu.town_state_id(+) and
+  tscu.characteristic_id(+)=56 and -- "Включен в договор по УУ"
+  ord.c1=sat.order_id(+) and
+  ord.c4=srv.c1(+) and
+  ord.c1=dirs.order_id(+)
+;
