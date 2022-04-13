@@ -1,0 +1,68 @@
+create or replace view contour.report_suist2_dir_tasks_dur as
+select
+  -- СУИСТ2. Длительность выполнения задач в поручениях
+  trunc(convert_date_from_rem_to_ora(dir_tasks.c1112000007)) as report_date, -- Дата выполнения задачи поручения
+  t.c8 as directive_task_name, -- Название задачи поручения
+  dir_tasks.c1112000016 as executor_username, -- Пользователь, который выполнил задачу поручения
+  nvl(f.item_hierarchy_name,'*Неизвестно*') as executor_group_name, -- Подразделение исполнителя
+  nvl(usr_filial.name,'*Неизвестно*') as executor_filial_name, -- Филиал пользователя
+  nvl(dir.c536870964,'*Неизвестно*') as executor_role, -- Роль исполнителя
+  nvl(ord.c700001003,'*Не указан*') as town_name, -- Населенный пункт
+  decode(ord.c700001016,0,'Инсталляция - КТ',1,'Инсталляция - Абонент',3,'Инсталляция - Дилер',null,'*Не указано*','*Неизвестное значение*') as installation_flag, -- Самостоятельная инсталляция
+  decode(ord.c700001015,0,'Автоматическая',1,'Ручная','*Не указано*') as activation_type, -- Тип активации
+  nvl(order_action.c8,'*Не указан*') as order_action, -- Вид наряда
+  nvl(decode(ord.c8,'R',dev_group.name,rsg.name),'*Не указана*') as device_group, -- Группа устройств
+  nvl(decode(ord.c8,'R',conn_type_old.name,rs.name),'*Не указан*') as connect_type_old, -- Тип соединения (с)
+  nvl(ord.c700003015,-1) as ms_segment_id, -- ID сегмента лицевого счета
+  nvl(ms_segment.name,'*Не указан*') as ms_segment_name, -- Сегмент лицевого счета
+  case
+    when ord.c8='2' and dir_tasks.c1112000018=34 and nvl(dir_tasks.c1112000016,'.') not in ('System_Integration_OSM','WebServiceUser_ASAP') then 'Да'
+    else 'Нет'
+  end as executed_by_hobo, -- Отработано из Hobo
+  -- decode(ord.c700001503,null,'*Нет данных*',ord.c700001503 || '%') as install_quality, -- Качество инсталляционных работ
+  count(*) as directive_task_count, -- Общее кол-во поручений
+  -- round(sum(dir_tasks.c1112000007-dir_tasks.c1112000011)/60,2) as directive_task_duration, -- Суммарная длительность выполнения задач, мин.
+  round(sum(dir_tasks.c1112000015)/60,2) as directive_task_duration, -- Суммарная длительность выполнения задач, раб. мин.
+  sum(
+       case
+         when dir_tasks.c1112000007>dir_tasks.c1112000006 then 1
+         else 0
+       end
+     ) as directive_task_bad_term_count -- Кол-во сверхсрочных задач
+from
+  aradmin.t1535 dir_tasks, -- CMS2:Order_Directive_Tasks
+  aradmin.t1533 dir, -- CMS2:Order_Directive
+  aradmin.t1532 ord, -- CMS2:Order
+  aradmin.t1488 order_action, -- Dict:Order_Action
+  nsi.device_group dev_group, -- Dict:Device_Group
+  isb.resource_spec_group rsg,
+  nsi.connect_type conn_type_old, -- Dict:Connect_Type
+  isb.resource_specification rs,
+  sust.filial f,
+  aradmin.t16 usr, -- User
+  sust.filial usr_filial,
+  aradmin.t1551 t, -- BPv3:Task
+  isb.ms_segment ms_segment
+where
+  -- ord.c1='DOR-001518520' and
+  dir.c3>1593540000 and -- поручения, созданные с 01.07.2020
+  ord.c3>1593540000 and -- наряды, созданные с 01.07.2020
+  dir_tasks.c8=dir.c1 and
+  dir_tasks.c1112000007>1593540000 and -- задачи, выполненные с 01.07.2020
+  dir_tasks.c1112000002=t.c1 and
+  dir.c8=ord.c1 and
+  ord.c700002006=order_action.c1(+) and
+  ord.c700002009=dev_group.device_group_id(+) and
+  ord.c700002009=rsg.id(+) and
+  nvl(ord.c700002103,ord.c700001153)=conn_type_old.connect_type_id(+) and
+  nvl(ord.c700002103,ord.c700002203)=rs.id(+) and
+  dir_tasks.c1112000013=f.id_filial(+) and
+  dir_tasks.c1112000016=usr.c101(+) and
+  usr.c600000040=usr_filial.id_filial(+) and
+  ord.c700003015=ms_segment.id(+)
+group by
+  trunc(convert_date_from_rem_to_ora(dir_tasks.c1112000007)),t.c8,dir_tasks.c1112000016,
+  f.item_hierarchy_name,usr_filial.name,dir.c536870964,ord.c700001003,ord.c700001016,ord.c700001015,
+  order_action.c8,dev_group.name,conn_type_old.name,ord.c8,rsg.name,rs.name,
+  ord.c8,dir_tasks.c1112000018,ord.c700003015,ms_segment.name
+;
