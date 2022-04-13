@@ -1,0 +1,118 @@
+CREATE OR REPLACE VIEW CONTOUR.REPORT_SUNR_S5_DETAIL_2 AS
+select
+  -- СУНР. Отчет по КПР №С5 - Своевременность сервисного обеспечения сети (КПР 77)
+  -- Детализация - "Закрытые ПБР"
+  t1.request_id, -- Номер ПБР
+  decode(t1.request_priority,0,'Критический',1,'Срочный',2,'Несрочный','*Неизвестно*') as request_priority,
+  nvl(sc.service_centre_name,'*Неизвестно*') as service_centre_name, -- Сервисный центр
+  t1.start_ora_date as report_date, -- Отчетный период
+  nvl(t1.task_executor_login,'*Неизвестно*') as task_executor_login, -- Супервизор
+  nvl(u.c600000184,'*Не указано*') as action_submitter_department, -- Подразделение Супервизора
+  t1.network_category, -- Категория сети
+  t1.ticket_type, -- Тип обращения
+  t1.incident_decision_evaluation, -- Оценка решения инцидента
+  t1.request_service_contract as service_contract, -- Сервисный контракт
+  t1.request_alarm_raport as case_sent, -- Кейс отправлен
+  convert_date_from_rem_to_ora(decode(t1.request_close_rem_date,1893434400,null,t1.request_close_rem_date)) as request_close_date, -- Дата закрытия ПБР
+  decode(t1.request_bad_term_flag,1,'Да','Нет') as measure_closed_exp_req_flag, -- ПБР сверхконтрольный
+  case
+    when t1.plan_case_duration_db_type=1 then
+      trunc(t1.plan_case_duration_db/86400) || ',' || ltrim(to_char(trunc(mod(t1.plan_case_duration_db,86400)/3600),'00')) || '.' || ltrim(to_char(trunc(mod(t1.plan_case_duration_db,3600)/60),'00')) || 'к'
+    else
+      trunc(t1.plan_case_duration_db/28800) || ',' || ltrim(to_char(trunc(mod(t1.plan_case_duration_db,28800)/3600),'00')) || '.' || ltrim(to_char(trunc(mod(t1.plan_case_duration_db,3600)/60),'00')) || 'р'
+  end as plan_case_duration_text, -- Контрольная длительность (в текстовом виде)
+  case
+    when t1.plan_case_duration_db_type=1 then
+      trunc(t1.req_solve_fact_cal_duration/86400) || ',' || ltrim(to_char(trunc(mod(t1.req_solve_fact_cal_duration,86400)/3600),'00')) || '.' || ltrim(to_char(trunc(mod(t1.req_solve_fact_cal_duration,3600)/60),'00')) || 'к'
+    else
+      trunc(t1.req_solve_fact_work_duration/28800) || ',' || ltrim(to_char(trunc(mod(t1.req_solve_fact_work_duration,28800)/3600),'00')) || '.' || ltrim(to_char(trunc(mod(t1.req_solve_fact_work_duration,3600)/60),'00')) || 'р'
+  end as fact_case_duration_text -- Фактическая длительность (в текстовом виде)
+FROM
+  (
+    WITH dates as
+      (
+        select
+          trunc(add_months(sysdate,1-level),'mm') as start_ora_date,
+          aradmin.convert_date_from_ora_to_rem(to_char(trunc(add_months(sysdate,1-level),'mm'),'dd.mm.yyyy hh24:mi:ss')) as start_rem_date,
+          aradmin.convert_date_from_ora_to_rem(to_char(trunc(add_months(sysdate,2-level),'mm')-1/86400,'dd.mm.yyyy hh24:mi:ss')) as end_rem_date
+        from dual
+        connect by trunc(add_months(sysdate,1-level),'mm')>=to_date('01.05.2015','dd.mm.yyyy')
+      )
+      SELECT
+        task_history.request_id, -- Номер ПБР
+        dates.start_ora_date,
+        dates.start_rem_date,
+        dates.end_rem_date,
+        task_history.request_priority,
+        task_history.service_centre_id,
+        task_history.network_category,
+        task_history.ticket_type,
+        task_history.incident_decision_evaluation,
+        task_history.request_service_contract,
+        task_history.request_alarm_raport,
+        task_history.current_request_status,
+        task_history.task_start_min_rem_date, -- Дата назначения самой первой из рассматриваемых задач
+        task_history.request_close_rem_date, -- Дата закрытия ПБР (если ПРБ еще не закрыт, то подставляется 01.01.2030)
+        task_history.task_executor_login, -- Логин исполнителя самой первой выполненной задачи
+        task_history.plan_case_duration_db, -- Контрольная длительность
+        task_history.plan_case_duration_db_type, -- Исчисление контрольной длительности (раб. или календ.)
+        task_history.req_solve_fact_work_duration, -- Длительность выполнения задач, раб. сек.
+        task_history.req_solve_fact_cal_duration, -- Длительность выполнения задач, календ. сек.
+        case
+          when plan_case_duration_db_type=0 and req_solve_fact_work_duration>nvl(plan_case_duration_db,999999999) then 1
+          when plan_case_duration_db_type=1 and req_solve_fact_cal_duration>nvl(plan_case_duration_db,999999999) then 1
+          else 0
+        end as request_bad_term_flag -- ПБР сверхсрочный
+      FROM
+      (
+       select
+         t.c8 as request_id, -- Номер ПБР
+         r.c700000002 as request_priority,
+         r.c600000100 as service_centre_id,
+         nvl(r.c1200000095,'*Не указана*') as network_category, -- Категория сети
+         decode(r.c600000003,0,'Инцидент',1,'Проактивная задача',2,'Информационный запрос',3,'Запрос на развитие','*Не указан*') as ticket_type, -- Тип обращения
+         decode(r.c707000036,0,'Решение признано окончательным',1,'Решение является временным, требуется постоянное решение','*Не указана*') as incident_decision_evaluation, -- Оценка решения инцидента
+         decode(r.c1200000100,0,'Отсутствует',1,'Имеется','*Неизвестно*') as request_service_contract,
+         decode(r.c700000038,0,'Да',1,'Нет','*Неизвестно*') as request_alarm_raport,
+         case
+           when r.c1111000004 in ('BP-Task-0000241','BP-Task-0000245','BP-Task-0000249','BP-Task-0000253')
+             then 'Ожидание ответа из СЦ'
+           else 'Другое'
+         end as current_request_status,
+         --r.c3 as request_create_rem_date,
+         decode(r.c1111000004,'BP-Task-0000259',r.c1111000021,1893434400) as request_close_rem_date, -- Дата закрытия ПБР (если ПРБ еще не закрыт, то подставляется 01.01.2030)
+         min(t.c1112000011) as task_start_min_rem_date, -- Дата назначения самой первой задачи
+         max(t.c1112000011) as task_start_max_rem_date, -- Дата назначения самой последней задачи
+         min(t.c1112000016) KEEP (DENSE_RANK FIRST ORDER BY nvl(t.c1112000007,0) desc) as task_executor_login, -- Логин пользователя, который выполнил самую первую из рассматриваемых задач
+         r.c701400027 as plan_case_duration_db, -- Контрольная длительность
+         nvl(r.c701404027,1) as plan_case_duration_db_type, -- Исчисление контрольной длительности (раб. или календ.)
+         sum(nvl(t.c1112000015,0)) as req_solve_fact_work_duration, -- Длительность выполнения задач, раб. сек.
+         sum(nvl(t.c1112000007,t.c1112000011)-t.c1112000011) as req_solve_fact_cal_duration -- Длительность выполнения задач, календ. сек.
+       from
+         aradmin.t1388 r, -- AHD:TTR
+         aradmin.t1389 t -- AHD:TTR_Tasks
+       where
+         r.c1=t.c8 and
+         r.c1111000004!='BP-Task-0000231' and -- не рассматриваем отмененные ПБР (в задаче "Проблемный билет отменен")
+         t.c1112000002 in (
+                            'BP-Task-0000241', -- "Ожидание ответа из СЦ на кейс по устранению инцидента"
+                            'BP-Task-0000245', -- "Ожидание ответа из СЦ на кейс по решению проблемы"
+                            'BP-Task-0000249', -- "Ожидание ответа из СЦ на кейс по предупреждению проблем"
+                            'BP-Task-0000253'  -- "Ожидание ответа из СЦ на кейс по запросу"
+                          )
+         -- t.c1112000007 is not null -- рассматриваем только выполненные задачи
+        group by
+          t.c8,r.c700000002,r.c600000100,r.c1200000095,r.c600000003,r.c707000036,r.c1200000100,
+          r.c700000038,r.c3,r.c1111000004,r.c1111000021,r.c701400027,r.c701404027
+      ) task_history,
+      dates
+    where
+      task_history.request_close_rem_date>=dates.start_rem_date and
+      task_history.request_close_rem_date<=dates.end_rem_date
+  ) t1,
+  aradmin.t16 u, -- User
+  sust.service_centre sc
+WHERE
+  t1.task_executor_login=u.c101(+) and
+  t1.service_centre_id=sc.service_centre_id(+)
+;
