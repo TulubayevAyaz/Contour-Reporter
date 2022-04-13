@@ -1,0 +1,122 @@
+create or replace view contour.sql_uto_current_location as
+select
+  -- Представление используется для наполнения данными таблицы TAB_UTO_CURRENT_LOCATION
+  -- УТО. Отчет о текущем местонахождении терминального оборудования
+  convert_date_from_rem_to_ora(ha.history_max_date) as report_full_date, -- Дата и время перемещения оборудования в текущий ЦУ
+  ltrim(a.c1,'0') as asset_id, -- ID оборудования
+  trim(a.c8) as asset_name, -- Наименование оборудования
+  trim(a.c600000005) as ont_responsible_person, -- Табельный номер МОЛ
+  trim(a.c700000208) as mac_address, -- MAC адрес
+  trim(a.c700000210) as inventory_number, -- Инвентарный номер
+  trim(a.c700000209) as additional_data, -- Дополнительные данные
+  a.c700000050 as vendor_id, -- ID производителя оборудования
+  a.c700000060 as equipment_type_id, -- ID типа оборудования
+  a.c700000201 as equipment_data_serial, -- Серийный номер
+  ord.account_number as ont_client_account_number, -- Номер лицевого счета абонента
+  decode(ord.disabled_for_nonpayment_date,null,null,convert_date_from_rem_to_ora(ord.disabled_for_nonpayment_date)) as disabled_for_nonpayment_date, -- Дата отключения за дебиторскую задолженность
+  f1.id_filial as owner_id, -- Идентификатор Владельца
+  case
+    when f1.id_filial between 3001 and 3114 then 'Y'
+    else null
+  end as owner_is_subscriber_flag, -- Оборудование в собственности абонента
+  replace(a.c1222002011,'-','') as current_account_id, -- ID текущего центра учета
+  decode(a.c1222002302,'-',null,a.c1222002302) as current_location_id, -- ID текущего местонахождения
+  hh.history_location_id as last_sklad_location_id, -- ID последнего места хранения
+  ord.order_item_product_group_id as order_item_product_group_id, -- ID группы продукта позиции заказа
+  ord.order_item_device_new, -- Номер устройства позиции заказа
+  ha.history_last_submitter, -- Пользователь, по инициативе которого выполнено последнее изменение центр учета
+  ord.order_line_number, -- Номер прямой линии
+  ord.client_address_db, -- Адрес абонента
+  a.c600000020 as imei_code, -- IMEI код
+  input_register.input_register_document, -- Номер документа поставки/оприходования
+  decode(input_register.input_register_date,null,null,trunc(convert_date_from_rem_to_ora(input_register.input_register_date))) as input_register_date, -- Дата поставки/оприходования
+  ord.town_state_id
+from
+  aradmin.t481 a, -- BPv2:TR:Assets
+  (
+    select
+      -- Если единица оборудования присутствует в нескольких нарядах УТО, то выбирается тот, который создан последним.
+      -- Причём наряды в задаче "Эксплуатация оборудования" имеют больший приоритет.
+      ord2.c800000000 as asset_id,
+      max(ord2.c536870988) keep (DENSE_RANK FIRST order by decode(ord2.c1111000001,'BP-Task-0000061','B','A') || ord2.c1 desc) as disabled_for_nonpayment_flag, -- Отключено за дебиторскую задолженность
+      max(ord2.c536870989) keep (DENSE_RANK FIRST order by decode(ord2.c1111000001,'BP-Task-0000061','B','A') || ord2.c1 desc) as disabled_for_nonpayment_date, -- Дата отключения за дебиторскую задолженность
+      max(ord2.c700002009) keep (DENSE_RANK FIRST order by decode(ord2.c1111000001,'BP-Task-0000061','B','A') || ord2.c1 desc) as order_item_product_group_id, -- ID группы продукта позиции заказа
+      max(ord2.c700001201) keep (DENSE_RANK FIRST order by decode(ord2.c1111000001,'BP-Task-0000061','B','A') || ord2.c1 desc) as order_item_device_new, -- Номер устройства позиции заказа
+      max(ord2.c600000004) keep (DENSE_RANK FIRST order by decode(ord2.c1111000001,'BP-Task-0000061','B','A') || ord2.c1 desc) as account_number, -- Номер лицевого счета абонента
+      max(ord2.c600000003) keep (DENSE_RANK FIRST order by decode(ord2.c1111000001,'BP-Task-0000061','B','A') || ord2.c1 desc) as order_line_number, -- Номер прямой линии
+      max(ord2.c600000006) keep (DENSE_RANK FIRST order by decode(ord2.c1111000001,'BP-Task-0000061','B','A') || ord2.c1 desc) as client_address_db, -- Адрес абонента
+      max(ord2.c700001264) keep (DENSE_RANK FIRST order by decode(ord2.c1111000001,'BP-Task-0000061','B','A') || ord2.c1 desc) as town_state_id
+    from
+      aradmin.t706 ord2 -- ONT:Order
+    where
+      ord2.c800000000 is not null -- Asset_ID
+      -- and ord2.c800000000='000002478384'
+    group by
+      ord2.c800000000
+  ) ord,
+  sust.equipment_type e,
+  sust.filial f1,
+  (
+    -- Определение последнего в истории местонахождения класса "Склад"
+    select
+      h2.c8 as asset_id,
+      max(h2.c1222002302) keep (dense_rank last order by h2.c1 asc) as history_location_id
+    from
+      sust.location l2,
+      aradmin.t647 h2 -- BPv2:TR:Asset_State_History
+    where
+      h2.c1222002302=l2.location_id and
+      l2.location_class=4 and
+      h2.c7!=2
+      -- and h2.c8='000000011854'
+    group by h2.c8
+  ) hh,
+  (
+    -- Определение последнего в истории факта об изменении центра учета оборудования
+    select
+      max(h9.c3) as history_max_date,
+      max(h9.c2) keep (dense_rank last order by h9.c3 asc) as history_last_submitter, -- Пользователь, по инициативе которого выполнено последнее изменение центр учета
+      h9.c8 as asset_id
+    from
+      aradmin.t647 h9 -- BPv2:TR:Asset_State_History
+    where
+      h9.c7!=2 and
+      h9.c1222002011!=h9.c1222002012 -- последняя запись, где ЦУ был изменен
+      -- and h9.c8='000000011854'
+    group by h9.c8
+  ) ha,
+  (
+    -- Определение номера договора даты поставки/оприходования оборудования
+    select
+      max(decode(ir.c4,null,ir.c600000001,qd.c536870919)) as input_register_document, -- Номер документа поставки/оприходования
+      max(decode(ir.c4,null,
+        case
+          when ir.c600000002>0 then (ir.c600000002-2440588)*86400
+          else (ir.c600000002+1001860)*86400
+        end,
+        qd.c536870922)) as input_register_date, -- Дата поставки/оприходования
+      li.c1333000200 as asset_id
+    from
+      aradmin.t724 ir, -- ONT:InputRegister
+      aradmin.t482 li, -- BPv2:TR:LotItems
+      aradmin.t1328 qd -- ONT:Quantity_Devices
+    where
+      ir.c1111000004='BP-Task-0000051' and -- задача "Акт оформлен"
+      li.c1222000009=ir.c1 and
+      ir.c4=qd.c1(+)
+    group by
+      li.c1333000200
+  ) input_register
+where
+  a.c700000060=e.id_device_type and
+  e.application_flag=1 and -- Рассматривается только оборудование УТО
+  a.c1=ord.asset_id(+) and
+  --##-- ord.disabled_for_nonpayment_flag(+)=0 and -- Если наряд УТО существует, то рассматриваются только те, где установлена отметка об отключении за дебиторскую задолженность
+  replace(a.c1222002301,'-','')=f1.id_filial(+) and
+  a.c1222002011!='88' and -- не рассматриваем центр учета "Корзина"
+  a.c1222002011!='99' and -- Не рассматриваем центр учета "Замененное оборудование"
+  a.c1=hh.asset_id(+) and
+  a.c1=ha.asset_id and
+  a.c1=input_register.asset_id(+)
+  -- and a.c1='000000011854'
+;
