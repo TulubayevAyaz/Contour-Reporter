@@ -1,0 +1,35 @@
+create or replace view contour.report_supb_m7_2_s_detail as
+select
+  -- Отчет по КПР №7.2-С - Устранение аварий и повреждений в контрольный срок в разрезе филиалов. Детализация.
+  r.c1 as request_id,
+  r.c2 as request_submitter,
+  h.c900000007 as action_name,
+  h.c2 as action_submitter,
+  nvl(u.user_filial_name,'ГЦУСТ') as action_submitter_filial,
+  r.c700000013 as responsible_zone,
+  r.c1200000095 as network_category,
+  nvl(r.c700000082,'*Не указано*') as failure_character,
+  nvl(r.c700000028,'*Не указано*') as ticket_type,
+  nvl(r.c536870990,'*Не указано*') as problem_type,
+  grp.c105 as executor_group_name, -- Группа исполнителей
+  r.c700000017 as alarm_full_description,
+  r.c700000036 || '.' as close_code_description, -- || r.c700000037 as close_code_description,
+  trunc(r.c700000042_date) as action_date,
+  to_char(h.c3_date,'dd.mm.yyyy hh24:mi:ss') as action_date_char,
+  to_char(r.c700000003_date,'dd.mm.yyyy hh24:mi:ss') as req_issue_date_char,
+  to_char(r.c700000032_date,'dd.mm.yyyy hh24:mi:ss') as req_solve_date_char,
+  round(r.c702000027/60,2) as term_plan_minutes,
+  round(t.term_fact_seconds/60,2) as term_fact_minutes,
+  decode(t.term_flag,0,'Нет','Да') as filial_term_flag
+from
+  contour.tab_supb_m7_2_s t,
+  contour.t73_sync h,
+  contour.t70_sync r,
+  contour.dict_user_filial u,
+  aradmin.T17 grp
+where
+  t.action_req_id=h.c1 and
+  h.c8=r.c1 and
+  r.c700001023=to_char(grp.c106(+)) and
+  h.c2=u.user_login --(+)
+;
