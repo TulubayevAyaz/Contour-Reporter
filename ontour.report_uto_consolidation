@@ -1,0 +1,48 @@
+create or replace view contour.report_uto_consolidation as
+select
+  -- УТО. Сводный отчет по оборудованию УТО.
+  t.c700000011 as filial_name, -- Филиал
+  decode(t.c700000010,1,'РДТ "Алматытелеком"',2,'РДТ "Алматытелеком"',3,'РДТ "Астанателеком"',8,'РДТ "Астанателеком"',t.c700000011) as filial_name_with_RDT, -- Филиал (с РДТ)
+  -- t.c536870917 as device_type, -- Тип оборудования
+  nvl(purp.c8,'*Неизвестно*') as functional_purpose, -- Функциональное назначение
+  sum(t.c536870918) as purchased_equipment_quantity, -- Кол-во единиц оборудования, поставленного в филиалы по договорам
+  0 as registered_equipment_quantity
+from
+  aradmin.t1328 t,  -- ONT:Quantity_Devices
+  aradmin.t743 typ, -- ONT:Type (шаблоны технических устройств)
+  aradmin.t744 purp -- ONT:Purposes (функциональное назначение терминалов УТО)
+where
+  t.c700000014=typ.c1(+) and
+  typ.c600000106=purp.c1(+)
+group by
+  t.c700000011,t.c700000010,purp.c8
+
+UNION ALL
+
+select
+  nvl(f2.name,'*Не указан*') as filial_name, -- Филиал Владельца
+  nvl(decode(f2.id_filial,1,'РДТ "Алматытелеком"',2,'РДТ "Алматытелеком"',3,'РДТ "Астанателеком"',8,'РДТ "Астанателеком"',f2.name),'*Не указан*') as filial_name_with_RDT, -- Филиал Владельца (с РДТ)
+  -- e.name as device_type, -- Тип оборудования
+  nvl(purp.c8,'*Неизвестно*') as functional_purpose, -- Функциональное назначение
+  0 as purchased_equipment_quantity,
+  count(*) as registered_equipment_quantity -- Кол-во единиц оборудования, оприходованных в УТО
+from
+  aradmin.t481 a,   -- BPv2:TR:Assets
+  sust.equipment_type e,
+  aradmin.t743 typ, -- ONT:Type (шаблоны технических устройств)
+  aradmin.t744 purp, -- ONT:Purposes (функциональное назначение терминалов УТО)
+  sust.filial f1,
+  sust.filial f2
+where
+  a.c700000060=e.id_device_type and
+  e.application_flag=1 and -- Рассматриваем только оборудование УТО
+  e.id_device_type=typ.c536870918(+) and -- Тип оборудования в шаблоне
+  typ.c600000106=purp.c1(+) and -- Функциональное назначение
+  a.c1222002011!='88' and -- Не рассматриваем оборудование в ЦУ "Корзина"
+  a.c1222002011!='99' and -- Не рассматриваем оборудование в ЦУ "Замененное оборудование"
+  decode(a.c1222002301,'-','-1',a.c1222002301)=f1.id_filial(+) and
+  f1.item_type(+)!=4 and -- Не рассматриваем оборудование, Владельцем которого является сторонняя организация
+  f1.root_item_id=f2.id_filial(+)
+group by
+  f2.name,f2.id_filial,purp.c8
+;
